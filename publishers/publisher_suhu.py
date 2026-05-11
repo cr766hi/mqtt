@@ -2,7 +2,7 @@
 Publisher 1 - Sensor Suhu (Temperature Sensor)
 Role: Simulasi sensor suhu ruangan
 QoS: 1 (at least once)
-Fitur: Retain message, Last Will & Testament
+Fitur: Retain message, Last Will & Testament, User Properties, Message Expiry Interval
 Topic: sensors/temperature
 """
 
@@ -12,6 +12,7 @@ import time
 import random
 import logging
 from datetime import datetime
+import uuid
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,6 +29,7 @@ CLIENT_ID   = "publisher-sensor-suhu"
 TOPIC       = "sensors/temperature"
 QOS         = 1          # QoS Level 1
 INTERVAL    = 3          # Kirim data setiap 3 detik
+MESSAGE_EXPIRY = 60      # Message expiry interval (detik) - MQTT 5.0 Feature
 
 # Last Will & Testament (LWT)
 # Pesan otomatis dikirim broker jika publisher disconnect tiba-tiba
@@ -38,12 +40,28 @@ LWT_PAYLOAD = json.dumps({
     "timestamp": None  # akan diisi saat disconnect
 })
 
+# User Properties - MQTT 5.0 Feature untuk metadata sensor
+USER_PROPERTIES = [
+    ("sensor_type", "temperature"),
+    ("sensor_model", "DHT22"),
+    ("location_zone", "Ruang Server"),
+    ("firmware_version", "1.2.3"),
+    ("mqtt_version", "5.0")
+]
+
+# Request-Response topic (untuk command dari alert monitor)
+RESPONSE_TOPIC = "response/publisher-suhu"
+RESPONSE_QUEUE = []  # Queue untuk menyimpan pesan masuk
+
 # =============================================
 # CALLBACK FUNCTIONS
 # =============================================
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
         logging.info(f"✅ Terhubung ke broker MQTT ({BROKER_HOST}:{BROKER_PORT})")
+        # Subscribe ke command topic untuk request-response pattern
+        client.subscribe("command/sensor-suhu", qos=1)
+        logging.info("📡 Subscribe ke command/sensor-suhu untuk request-response")
         # Publish status online
         client.publish(
             LWT_TOPIC,
@@ -53,6 +71,48 @@ def on_connect(client, userdata, flags, rc):
         )
     else:
         logging.error(f"❌ Gagal connect, kode: {rc}")
+
+def on_message(client, userdata, msg):
+    """Handler untuk pesan request masuk (request-response pattern)"""
+    try:
+        command = json.loads(msg.payload.decode())
+        cmd_type = command.get("type", "unknown")
+        correlation_id = command.get("correlation_id", str(uuid.uuid4()))
+        
+        if cmd_type == "GET_STATUS":
+            response = {
+                "correlation_id": correlation_id,
+                "client_id": CLIENT_ID,
+                "type": "STATUS_RESPONSE",
+                "status": "ACTIVE",
+                "qos": QOS,
+                "expiry_interval": MESSAGE_EXPIRY,
+                "timestamp": datetime.now().isoformat()
+            }
+            client.publish(
+                RESPONSE_TOPIC,
+                json.dumps(response),
+                qos=1,
+                retain=False
+            )
+            logging.info(f"📨 Request-Response: GET_STATUS (correlation_id={correlation_id})")
+        elif cmd_type == "GET_CONFIG":
+            response = {
+                "correlation_id": correlation_id,
+                "client_id": CLIENT_ID,
+                "type": "CONFIG_RESPONSE",
+                "user_properties": dict(USER_PROPERTIES),
+                "message_expiry_interval": MESSAGE_EXPIRY,
+                "timestamp": datetime.now().isoformat()
+            }
+            client.publish(
+                RESPONSE_TOPIC,
+                json.dumps(response),
+                qos=1
+            )
+            logging.info(f"📨 Request-Response: GET_CONFIG (correlation_id={correlation_id})")
+    except json.JSONDecodeError:
+        logging.warning("⚠️ Pesan command tidak valid JSON")
 
 def on_publish(client, userdata, mid):
     logging.info(f"   📤 Pesan terkirim (message_id={mid})")
@@ -66,7 +126,7 @@ def on_disconnect(client, userdata, rc):
 # =============================================
 # SETUP CLIENT
 # =============================================
-client = mqtt.Client(client_id=CLIENT_ID)
+client = mqtt.Client(client_id=CLIENT_ID, protocol=mqtt.MQTTv311)
 
 # Daftarkan LWT sebelum connect
 client.will_set(
@@ -76,9 +136,13 @@ client.will_set(
     retain=True
 )
 
+# Set receive maximum (Flow Control) - MQTT 5.0 Feature
+client.max_inflight_messages_set(20)  # Maximum 20 messages in flight
+
 client.on_connect    = on_connect
 client.on_publish    = on_publish
 client.on_disconnect = on_disconnect
+client.on_message    = on_message
 
 # =============================================
 # SIMULASI DATA SUHU
@@ -112,6 +176,11 @@ def main():
     logging.info(f"   QoS     : {QOS}")
     logging.info(f"   Interval: {INTERVAL} detik")
     logging.info(f"   LWT     : {LWT_TOPIC}")
+    logging.info(f"   📌 FITUR BARU:")
+    logging.info(f"      - Message Expiry Interval: {MESSAGE_EXPIRY}s")
+    logging.info(f"      - User Properties: {len(USER_PROPERTIES)} properties")
+    logging.info(f"      - Request-Response topic: {RESPONSE_TOPIC}")
+    logging.info(f"      - Flow Control: max_inflight=20 messages")
 
     client.connect(BROKER_HOST, BROKER_PORT, keepalive=60)
     client.loop_start()
@@ -121,6 +190,7 @@ def main():
             temp = generate_temperature()
             status = get_temperature_status(temp)
 
+            # Payload dengan User Properties dan Message Expiry info
             payload = {
                 "sensor_id": "TEMP-001",
                 "client_id": CLIENT_ID,
@@ -130,14 +200,17 @@ def main():
                 "status": status,
                 "location": "Ruang Server",
                 "timestamp": datetime.now().isoformat(),
-                "qos_level": QOS
+                "qos_level": QOS,
+                "message_id": str(uuid.uuid4()),
+                "message_expiry_seconds": MESSAGE_EXPIRY,
+                "user_properties": dict(USER_PROPERTIES)  # User Properties - MQTT 5.0
             }
 
             result = client.publish(
                 TOPIC,
                 json.dumps(payload),
                 qos=QOS,
-                retain=False  # Data real-time, tidak perlu retain
+                retain=False
             )
 
             logging.info(f"🌡️  Suhu: {temp}°C | Status: {status} | mid={result.mid}")

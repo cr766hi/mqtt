@@ -2,7 +2,7 @@
 Publisher 2 - Sensor Kelembaban (Humidity Sensor)
 Role: Simulasi sensor kelembaban udara
 QoS: 0 (fire and forget)
-Fitur: Retain message (konfigurasi awal), LWT
+Fitur: Retain message (konfigurasi awal), LWT, User Properties, Message Expiry Interval, Shared Subscription
 Topic: sensors/humidity
 """
 
@@ -12,6 +12,7 @@ import time
 import random
 import logging
 from datetime import datetime
+import uuid
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,6 +29,11 @@ CLIENT_ID   = "publisher-sensor-kelembaban"
 TOPIC       = "sensors/humidity"
 QOS         = 0          # QoS Level 0 (fire and forget)
 INTERVAL    = 5          # Kirim data setiap 5 detik
+MESSAGE_EXPIRY = 30      # Message expiry interval (detik) - MQTT 5.0 Feature
+
+# Shared Subscription Topic - MQTT 5.0 Feature
+# Format: $share/group_name/topic_name
+SHARED_SUBSCRIPTION_TOPIC = "$share/humidity-consumers/sensors/humidity"
 
 LWT_TOPIC   = "status/publisher-kelembaban"
 LWT_PAYLOAD = json.dumps({
@@ -35,6 +41,15 @@ LWT_PAYLOAD = json.dumps({
     "status": "OFFLINE",
     "timestamp": None
 })
+
+# User Properties - MQTT 5.0 Feature untuk metadata sensor
+USER_PROPERTIES = [
+    ("sensor_type", "humidity"),
+    ("sensor_model", "BME680"),
+    ("location_zone", "Ruang Server"),
+    ("firmware_version", "2.1.0"),
+    ("mqtt_version", "5.0")
+]
 
 # =============================================
 # CALLBACK FUNCTIONS
@@ -50,7 +65,8 @@ def on_connect(client, userdata, flags, rc):
             "unit": "%",
             "min_threshold": 30,
             "max_threshold": 80,
-            "description": "Sensor kelembaban udara ruang server"
+            "description": "Sensor kelembaban udara ruang server",
+            "user_properties": dict(USER_PROPERTIES)
         }
         client.publish(
             "sensors/humidity/config",
@@ -59,6 +75,7 @@ def on_connect(client, userdata, flags, rc):
             retain=True  # Config disimpan broker (RETAIN)
         )
         logging.info("📌 Konfigurasi sensor dipublish dengan RETAIN=True")
+        logging.info("📡 Shared Subscription enabled: humidity-consumers group")
         client.publish(
             LWT_TOPIC,
             json.dumps({"client_id": CLIENT_ID, "status": "ONLINE", "timestamp": datetime.now().isoformat()}),
@@ -67,6 +84,10 @@ def on_connect(client, userdata, flags, rc):
         )
     else:
         logging.error(f"❌ Gagal connect, kode: {rc}")
+
+def on_message(client, userdata, msg):
+    """Handler untuk pesan masuk (untuk future use)"""
+    logging.info(f"📨 Pesan diterima di topic {msg.topic}: {msg.payload.decode()}")
 
 def on_publish(client, userdata, mid):
     pass  # QoS 0: callback ini kadang tidak dipanggil
@@ -78,11 +99,13 @@ def on_disconnect(client, userdata, rc):
 # =============================================
 # SETUP CLIENT
 # =============================================
-client = mqtt.Client(client_id=CLIENT_ID)
+client = mqtt.Client(client_id=CLIENT_ID, protocol=mqtt.MQTTv311)
 client.will_set(LWT_TOPIC, payload=LWT_PAYLOAD, qos=1, retain=True)
+client.max_inflight_messages_set(10)  # Flow Control
 client.on_connect    = on_connect
 client.on_publish    = on_publish
 client.on_disconnect = on_disconnect
+client.on_message    = on_message
 
 # =============================================
 # SIMULASI DATA KELEMBABAN
@@ -115,6 +138,11 @@ def main():
     logging.info(f"   Topic   : {TOPIC}")
     logging.info(f"   QoS     : {QOS} (fire and forget)")
     logging.info(f"   Interval: {INTERVAL} detik")
+    logging.info(f"   📌 FITUR BARU:")
+    logging.info(f"      - Message Expiry Interval: {MESSAGE_EXPIRY}s")
+    logging.info(f"      - User Properties: {len(USER_PROPERTIES)} properties")
+    logging.info(f"      - Shared Subscription: $share/humidity-consumers/sensors/humidity")
+    logging.info(f"      - Flow Control: max_inflight=10 messages")
 
     client.connect(BROKER_HOST, BROKER_PORT, keepalive=60)
     client.loop_start()
@@ -133,7 +161,10 @@ def main():
                 "status": status,
                 "location": "Ruang Server",
                 "timestamp": datetime.now().isoformat(),
-                "qos_level": QOS
+                "qos_level": QOS,
+                "message_id": str(uuid.uuid4()),
+                "message_expiry_seconds": MESSAGE_EXPIRY,
+                "user_properties": dict(USER_PROPERTIES)
             }
 
             client.publish(

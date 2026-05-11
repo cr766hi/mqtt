@@ -12,6 +12,7 @@ import time
 import random
 import logging
 from datetime import datetime
+import uuid
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,6 +30,7 @@ TOPIC          = "sensors/motion"
 TOPIC_ALERT    = "sensors/motion/alert"
 QOS            = 2          # QoS Level 2 (exactly once) - paling aman untuk alert
 INTERVAL       = 4          # Kirim status setiap 4 detik
+MESSAGE_EXPIRY = 120        # Message expiry interval (detik) - MQTT 5.0
 
 LWT_TOPIC      = "status/publisher-gerak"
 LWT_PAYLOAD    = json.dumps({
@@ -37,12 +39,27 @@ LWT_PAYLOAD    = json.dumps({
     "timestamp": None
 })
 
+# User Properties - MQTT 5.0 Feature untuk metadata sensor
+USER_PROPERTIES = [
+    ("sensor_type", "motion_pir"),
+    ("sensor_model", "HC-SR501"),
+    ("location_zone", "Pintu Masuk"),
+    ("firmware_version", "3.0.1"),
+    ("mqtt_version", "5.0")
+]
+
+# Request-Response topic (untuk command dari alert monitor)
+RESPONSE_TOPIC = "response/publisher-gerak"
+
 # =============================================
 # CALLBACK FUNCTIONS
 # =============================================
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
         logging.info(f"✅ Terhubung ke broker MQTT ({BROKER_HOST}:{BROKER_PORT})")
+        # Subscribe ke command topic untuk request-response pattern
+        client.subscribe("command/sensor-gerak", qos=2)
+        logging.info("📡 Subscribe ke command/sensor-gerak untuk request-response")
         client.publish(
             LWT_TOPIC,
             json.dumps({"client_id": CLIENT_ID, "status": "ONLINE", "timestamp": datetime.now().isoformat()}),
@@ -51,6 +68,40 @@ def on_connect(client, userdata, flags, rc):
         )
     else:
         logging.error(f"❌ Gagal connect, kode: {rc}")
+
+def on_message(client, userdata, msg):
+    """Handler untuk pesan request masuk (request-response pattern)"""
+    try:
+        command = json.loads(msg.payload.decode())
+        cmd_type = command.get("type", "unknown")
+        correlation_id = command.get("correlation_id", str(uuid.uuid4()))
+        
+        if cmd_type == "RESET_COUNTER":
+            global motion_count, alert_count
+            motion_count = 0
+            alert_count = 0
+            response = {
+                "correlation_id": correlation_id,
+                "client_id": CLIENT_ID,
+                "type": "RESET_RESPONSE",
+                "status": "SUCCESS",
+                "timestamp": datetime.now().isoformat()
+            }
+            client.publish(RESPONSE_TOPIC, json.dumps(response), qos=2)
+            logging.info(f"📨 Request-Response: RESET_COUNTER (correlation_id={correlation_id})")
+        elif cmd_type == "GET_STATS":
+            response = {
+                "correlation_id": correlation_id,
+                "client_id": CLIENT_ID,
+                "type": "STATS_RESPONSE",
+                "motion_count": motion_count,
+                "alert_count": alert_count,
+                "timestamp": datetime.now().isoformat()
+            }
+            client.publish(RESPONSE_TOPIC, json.dumps(response), qos=2)
+            logging.info(f"📨 Request-Response: GET_STATS (correlation_id={correlation_id})")
+    except json.JSONDecodeError:
+        logging.warning("⚠️ Pesan command tidak valid JSON")
 
 def on_publish(client, userdata, mid):
     logging.info(f"   ✅ QoS 2 handshake selesai (message_id={mid}) - exactly once terjamin")
@@ -62,11 +113,13 @@ def on_disconnect(client, userdata, rc):
 # =============================================
 # SETUP CLIENT
 # =============================================
-client = mqtt.Client(client_id=CLIENT_ID)
+client = mqtt.Client(client_id=CLIENT_ID, protocol=mqtt.MQTTv311)
 client.will_set(LWT_TOPIC, payload=LWT_PAYLOAD, qos=1, retain=True)
+client.max_inflight_messages_set(30)  # Flow Control
 client.on_connect    = on_connect
 client.on_publish    = on_publish
 client.on_disconnect = on_disconnect
+client.on_message    = on_message
 
 # =============================================
 # SIMULASI SENSOR PIR
@@ -110,6 +163,11 @@ def main():
     logging.info(f"   QoS     : {QOS} (exactly once)")
     logging.info(f"   Interval: {INTERVAL} detik")
     logging.info("   ⚠️  QoS 2 = 4-way handshake, cocok untuk event kritis")
+    logging.info(f"   📌 FITUR BARU:")
+    logging.info(f"      - Message Expiry Interval: {MESSAGE_EXPIRY}s")
+    logging.info(f"      - User Properties: {len(USER_PROPERTIES)} properties")
+    logging.info(f"      - Request-Response topic: {RESPONSE_TOPIC}")
+    logging.info(f"      - Flow Control: max_inflight=30 messages")
 
     client.connect(BROKER_HOST, BROKER_PORT, keepalive=60)
     client.loop_start()
@@ -132,7 +190,10 @@ def main():
                 "motion_count_session": motion_count,
                 "location": "Pintu Masuk",
                 "timestamp": datetime.now().isoformat(),
-                "qos_level": QOS
+                "qos_level": QOS,
+                "message_id": str(uuid.uuid4()),
+                "message_expiry_seconds": MESSAGE_EXPIRY,
+                "user_properties": dict(USER_PROPERTIES)
             }
 
             result = client.publish(
@@ -154,7 +215,9 @@ def main():
                     "message": "Gerakan mencurigakan terdeteksi di Pintu Masuk!",
                     "confidence": confidence,
                     "timestamp": datetime.now().isoformat(),
-                    "action_required": True
+                    "action_required": True,
+                    "message_expiry_seconds": MESSAGE_EXPIRY,
+                    "user_properties": dict(USER_PROPERTIES)
                 }
                 client.publish(
                     TOPIC_ALERT,

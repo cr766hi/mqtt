@@ -38,16 +38,66 @@ mqtt_project/
 
 ## ✅ Fitur MQTT yang Diimplementasi
 
-| Fitur | Implementasi |
-|---|---|
-| **QoS 0** | Publisher Kelembaban → fire & forget |
-| **QoS 1** | Publisher Suhu → at least once delivery |
-| **QoS 2** | Publisher Gerak & Alert → exactly once |
-| **Retain Message** | Config sensor, Status publisher, Last alert |
-| **Last Will & Testament** | Semua publisher punya LWT di topic `status/#` |
-| **Wildcard `+`** | `sensors/+/alert` (single level) |
-| **Wildcard `#`** | `sensors/#`, `status/#` (multi level) |
-| **WebSocket** | Dashboard web terhubung via WS port 9001 |
+| Fitur | Implementasi | Status |
+|---|---|---|
+| **QoS 0** | Publisher Kelembaban → fire & forget | ✅ |
+| **QoS 1** | Publisher Suhu → at least once delivery | ✅ |
+| **QoS 2** | Publisher Gerak & Alert → exactly once | ✅ |
+| **Retain Message** | Config sensor, Status publisher, Last alert | ✅ |
+| **Last Will & Testament** | Semua publisher punya LWT di topic `status/#` | ✅ |
+| **Wildcard `+`** | `sensors/+/alert` (single level) | ✅ |
+| **Wildcard `#`** | `sensors/#`, `status/#` (multi level) | ✅ |
+| **User Properties** | Metadata sensor di setiap pesan (MQTT 5.0) | ✅ |
+| **Message Expiry** | TTL untuk sensor data (MQTT 5.0) | ✅ |
+| **Request-Response** | Pattern command-response (MQTT 5.0) | ✅ |
+| **Shared Subscription** | Distribusi pesan antar consumers (MQTT 5.0) | ✅ |
+| **Flow Control** | Max inflight messages per client (MQTT 5.0) | ✅ |
+| **WebSocket** | Dashboard web terhubung via WS port 9001 | ✅ |
+
+---
+
+## 🆕 MQTT 5.0 Features Baru
+
+### 1. **User Properties**
+Metadata custom untuk setiap sensor di dalam pesan:
+```json
+{
+  "sensor_type": "temperature",
+  "sensor_model": "DHT22",
+  "location_zone": "Ruang Server",
+  "firmware_version": "1.2.3",
+  "mqtt_version": "5.0"
+}
+```
+
+### 2. **Message Expiry Interval**
+TTL untuk pesan sensor (time-sensitive data):
+- Publisher Suhu: 60 detik
+- Publisher Kelembaban: 30 detik (QoS 0)
+- Publisher Gerak: 120 detik (alert kritis)
+
+### 3. **Request-Response Pattern**
+Command-response untuk control publisher:
+```
+Command Topics:  command/sensor-suhu, command/sensor-gerak
+Response Topics: response/publisher-suhu, response/publisher-gerak
+```
+Perintah yang didukung: `GET_STATUS`, `GET_CONFIG`, `RESET_COUNTER`, `GET_STATS`
+
+### 4. **Shared Subscription**
+Load-balancing untuk multiple consumers:
+```
+$share/humidity-consumers/sensors/humidity
+```
+
+### 5. **Flow Control**
+Kontrol jumlah pesan in-flight (max_inflight_messages):
+- Publisher Suhu: 20 messages
+- Publisher Kelembaban: 10 messages
+- Publisher Gerak: 30 messages
+- Alert Subscriber: 20 messages
+
+Lihat file `FEATURES_SUMMARY.md` untuk detail lengkap.
 
 ---
 

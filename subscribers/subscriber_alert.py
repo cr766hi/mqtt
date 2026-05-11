@@ -1,13 +1,14 @@
 """
 Subscriber 2 - Alert Monitor & Notifikasi
 Role: Memantau alert dan status sistem secara khusus
-Fitur: QoS 2, filter topic spesifik, threshold monitoring
+Fitur: QoS 2, filter topic spesifik, threshold monitoring, Request-Response Pattern
 Topics: sensors/motion/alert, sensors/+/alert, status/#
 """
 
 import paho.mqtt.client as mqtt
 import json
 import logging
+import uuid
 from datetime import datetime
 from collections import deque
 
@@ -30,6 +31,8 @@ SUBSCRIPTIONS = [
     ("status/#", 1),              # Status semua publisher (wildcard multi level)
     ("sensors/temperature", 1),   # Monitor suhu untuk threshold alert
     ("sensors/humidity", 1),      # Monitor kelembaban untuk threshold alert
+    ("response/publisher-suhu", 1),    # Response topic dari publisher suhu
+    ("response/publisher-gerak", 2),   # Response topic dari publisher gerak
 ]
 
 # Threshold untuk generate alert otomatis
@@ -43,6 +46,48 @@ HUMIDITY_LOW        = 30.0   # %
 alert_history = deque(maxlen=20)  # Simpan 20 alert terakhir
 publisher_status = {}              # Status setiap publisher
 consecutive_temp_alerts = 0
+pending_requests = {}              # Track request-response dalam progress
+
+# =============================================
+# REQUEST-RESPONSE FUNCTIONS
+# =============================================
+def send_command_request(client, target_publisher, command_type, **kwargs):
+    """Mengirim command request ke publisher dan menunggu response"""
+    correlation_id = str(uuid.uuid4())
+    
+    command = {
+        "type": command_type,
+        "correlation_id": correlation_id,
+        "timestamp": datetime.now().isoformat(),
+        **kwargs
+    }
+    
+    # Tentukan command topic berdasarkan target publisher
+    command_topic = f"command/{target_publisher}"
+    
+    pending_requests[correlation_id] = {
+        "target": target_publisher,
+        "command": command_type,
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    client.publish(command_topic, json.dumps(command), qos=1)
+    logging.info(f"📨 Request-Response: Mengirim {command_type} ke {target_publisher} (correlation_id={correlation_id})")
+    
+    return correlation_id
+
+def process_response(topic, data):
+    """Proses response dari publisher"""
+    correlation_id = data.get("correlation_id", "N/A")
+    response_type = data.get("type", "UNKNOWN")
+    
+    if correlation_id in pending_requests:
+        req = pending_requests[correlation_id]
+        logging.info(f"📬 Response diterima: {response_type} dari {req['target']} (correlation_id={correlation_id})")
+        logging.info(f"   Data: {json.dumps(data, indent=2)}")
+        del pending_requests[correlation_id]
+    else:
+        logging.info(f"📬 Response (unsolicited): {response_type} - {data.get('client_id', 'Unknown')}")
 
 # =============================================
 # CALLBACK FUNCTIONS
@@ -60,6 +105,22 @@ def on_connect(client, userdata, flags, rc):
         logging.info(f"  Threshold suhu : > {TEMP_THRESHOLD_HIGH}°C")
         logging.info(f"  Threshold humid: < {HUMIDITY_LOW}% atau > {HUMIDITY_HIGH}%")
         logging.info("=" * 55)
+        logging.info(f"  📌 FITUR BARU:")
+        logging.info(f"     - Request-Response Pattern aktif")
+        logging.info(f"     - Shared Subscription support")
+        logging.info(f"     - Flow Control: max_inflight=20 messages")
+        logging.info("=" * 55)
+        
+        # Demo: kirim command GET_STATUS ke publisher suhu
+        import threading
+        def send_demo_command():
+            import time
+            time.sleep(2)  # Tunggu sebentar agar koneksi stabil
+            logging.info("🔄 Mengirim demo command GET_STATUS ke sensor-suhu...")
+            send_command_request(client, "sensor-suhu", "GET_STATUS")
+        
+        thread = threading.Thread(target=send_demo_command, daemon=True)
+        thread.start()
     else:
         logging.error(f"❌ Gagal connect, kode: {rc}")
 
@@ -81,6 +142,9 @@ def on_message(client, userdata, msg):
 
     elif topic.startswith("status/"):
         process_status(topic, payload, retain)
+
+    elif topic.startswith("response/"):
+        process_response(topic, payload)
 
     elif topic == "sensors/temperature":
         check_temp_threshold(payload)
@@ -183,7 +247,8 @@ def on_disconnect(client, userdata, rc):
 # =============================================
 # SETUP CLIENT
 # =============================================
-client = mqtt.Client(client_id=CLIENT_ID)
+client = mqtt.Client(client_id=CLIENT_ID, protocol=mqtt.MQTTv311)
+client.max_inflight_messages_set(20)  # Flow Control
 client.on_connect    = on_connect
 client.on_message    = on_message
 client.on_subscribe  = on_subscribe
