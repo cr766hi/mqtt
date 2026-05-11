@@ -45,6 +45,15 @@ LWT_PAYLOAD = json.dumps({
 # Request-Response topic (untuk future use)
 RESPONSE_TOPIC = "response/publisher-kelembaban"
 
+# User Properties - MQTT 5.0 Feature untuk metadata tambahan
+USER_PROPERTIES = [
+    ("sensor_type", "humidity"),
+    ("model", "DHT22"),
+    ("location_zone", "server-room"),
+    ("firmware_version", "1.2.1"),
+    ("mqtt_version", "5.0")
+]
+
 # Topic Alias Mapping - MQTT 5.0 Feature untuk reduce bandwidth
 TOPIC_ALIASES = {
     "sensors/humidity": 1,
