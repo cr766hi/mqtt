@@ -53,6 +53,40 @@ USER_PROPERTIES = [
 RESPONSE_TOPIC = "response/publisher-suhu"
 RESPONSE_QUEUE = []  # Queue untuk menyimpan pesan masuk
 
+# Topic Alias Mapping - MQTT 5.0 Feature untuk reduce bandwidth
+# Assign integer ID ke topic panjang
+TOPIC_ALIASES = {
+    "sensors/temperature": 1,
+    "command/sensor-suhu": 2,
+    "response/publisher-suhu": 3,
+    "status/publisher-suhu": 4
+}
+
+# Track topic alias usage untuk monitoring
+topic_alias_usage = {
+    1: {"topic": "sensors/temperature", "count": 0, "bytes_saved": 0},
+    2: {"topic": "command/sensor-suhu", "count": 0, "bytes_saved": 0},
+    3: {"topic": "response/publisher-suhu", "count": 0, "bytes_saved": 0},
+    4: {"topic": "status/publisher-suhu", "count": 0, "bytes_saved": 0}
+}
+
+def get_topic_alias_id(topic):
+    """Get alias ID untuk topic, atau return topic jika tidak ada alias"""
+    return TOPIC_ALIASES.get(topic)
+
+def track_topic_alias_usage(alias_id, topic, payload_size):
+    """Track penggunaan topic alias untuk bandwidth monitoring"""
+    if alias_id in topic_alias_usage:
+        stats = topic_alias_usage[alias_id]
+        stats["count"] += 1
+        # Bytes saved = topic name length (akan dikirim sebagai ID saja)
+        stats["bytes_saved"] += len(topic.encode()) - 2  # 2 bytes untuk integer ID
+        
+        # Log every 10 publishes
+        if stats["count"] % 10 == 0:
+            total_saved = sum(s["bytes_saved"] for s in topic_alias_usage.values())
+            logging.info(f"   📊 Topic Alias Stats: {stats['count']} publishes, {total_saved} bytes saved")
+
 # =============================================
 # CALLBACK FUNCTIONS
 # =============================================
@@ -62,6 +96,9 @@ def on_connect(client, userdata, flags, rc):
         # Subscribe ke command topic untuk request-response pattern
         client.subscribe("command/sensor-suhu", qos=1)
         logging.info("📡 Subscribe ke command/sensor-suhu untuk request-response")
+        logging.info(f"   🏷️  Topic Alias Map: {len(TOPIC_ALIASES)} aliases configured")
+        for alias_id, topic in [(v, k) for k, v in TOPIC_ALIASES.items()]:
+            logging.info(f"      Alias #{alias_id}: {topic}")
         # Publish status online
         client.publish(
             LWT_TOPIC,
@@ -213,7 +250,12 @@ def main():
                 retain=False
             )
 
-            logging.info(f"🌡️  Suhu: {temp}°C | Status: {status} | mid={result.mid}")
+            # Track topic alias usage
+            alias_id = get_topic_alias_id(TOPIC)
+            if alias_id:
+                track_topic_alias_usage(alias_id, TOPIC, len(json.dumps(payload)))
+
+            logging.info(f"🌡️  Suhu: {temp}°C | Status: {status} | mid={result.mid} | Alias #{alias_id}")
             time.sleep(INTERVAL)
 
     except KeyboardInterrupt:

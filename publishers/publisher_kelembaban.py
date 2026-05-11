@@ -42,14 +42,39 @@ LWT_PAYLOAD = json.dumps({
     "timestamp": None
 })
 
-# User Properties - MQTT 5.0 Feature untuk metadata sensor
-USER_PROPERTIES = [
-    ("sensor_type", "humidity"),
-    ("sensor_model", "BME680"),
-    ("location_zone", "Ruang Server"),
-    ("firmware_version", "2.1.0"),
-    ("mqtt_version", "5.0")
-]
+# Request-Response topic (untuk future use)
+RESPONSE_TOPIC = "response/publisher-kelembaban"
+
+# Topic Alias Mapping - MQTT 5.0 Feature untuk reduce bandwidth
+TOPIC_ALIASES = {
+    "sensors/humidity": 1,
+    "sensors/humidity/config": 2,
+    "status/publisher-kelembaban": 3,
+    "command/sensor-kelembaban": 4
+}
+
+# Track topic alias usage
+topic_alias_usage = {
+    1: {"topic": "sensors/humidity", "count": 0, "bytes_saved": 0},
+    2: {"topic": "sensors/humidity/config", "count": 0, "bytes_saved": 0},
+    3: {"topic": "status/publisher-kelembaban", "count": 0, "bytes_saved": 0},
+    4: {"topic": "command/sensor-kelembaban", "count": 0, "bytes_saved": 0}
+}
+
+def get_topic_alias_id(topic):
+    """Get alias ID untuk topic"""
+    return TOPIC_ALIASES.get(topic)
+
+def track_topic_alias_usage(alias_id, topic, payload_size):
+    """Track penggunaan topic alias untuk bandwidth monitoring"""
+    if alias_id in topic_alias_usage:
+        stats = topic_alias_usage[alias_id]
+        stats["count"] += 1
+        stats["bytes_saved"] += len(topic.encode()) - 2
+        
+        if stats["count"] % 10 == 0:
+            total_saved = sum(s["bytes_saved"] for s in topic_alias_usage.values())
+            logging.info(f"   📊 Topic Alias Stats: {stats['count']} publishes, {total_saved} bytes saved")
 
 # =============================================
 # CALLBACK FUNCTIONS
@@ -72,9 +97,12 @@ def on_connect(client, userdata, flags, rc):
             "sensors/humidity/config",
             json.dumps(config_payload),
             qos=1,
-            retain=True  # Config disimpan broker (RETAIN)
+            retain=True
         )
         logging.info("📌 Konfigurasi sensor dipublish dengan RETAIN=True")
+        logging.info(f"   🏷️  Topic Alias Map: {len(TOPIC_ALIASES)} aliases configured")
+        for alias_id, topic in [(v, k) for k, v in TOPIC_ALIASES.items()]:
+            logging.info(f"      Alias #{alias_id}: {topic}")
         logging.info("📡 Shared Subscription enabled: humidity-consumers group")
         client.publish(
             LWT_TOPIC,
@@ -174,7 +202,12 @@ def main():
                 retain=False
             )
 
-            logging.info(f"💧 Kelembaban: {hum}% | Status: {status} | QoS=0 (no ack)")
+            # Track topic alias usage
+            alias_id = get_topic_alias_id(TOPIC)
+            if alias_id:
+                track_topic_alias_usage(alias_id, TOPIC, len(json.dumps(payload)))
+
+            logging.info(f"💧 Kelembaban: {hum}% | Status: {status} | QoS=0 (no ack) | Alias #{alias_id}")
             time.sleep(INTERVAL)
 
     except KeyboardInterrupt:

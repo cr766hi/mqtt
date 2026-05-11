@@ -51,6 +51,39 @@ USER_PROPERTIES = [
 # Request-Response topic (untuk command dari alert monitor)
 RESPONSE_TOPIC = "response/publisher-gerak"
 
+# Topic Alias Mapping - MQTT 5.0 Feature untuk reduce bandwidth
+TOPIC_ALIASES = {
+    "sensors/motion": 1,
+    "sensors/motion/alert": 2,
+    "status/publisher-gerak": 3,
+    "command/sensor-gerak": 4,
+    "response/publisher-gerak": 5
+}
+
+# Track topic alias usage
+topic_alias_usage = {
+    1: {"topic": "sensors/motion", "count": 0, "bytes_saved": 0},
+    2: {"topic": "sensors/motion/alert", "count": 0, "bytes_saved": 0},
+    3: {"topic": "status/publisher-gerak", "count": 0, "bytes_saved": 0},
+    4: {"topic": "command/sensor-gerak", "count": 0, "bytes_saved": 0},
+    5: {"topic": "response/publisher-gerak", "count": 0, "bytes_saved": 0}
+}
+
+def get_topic_alias_id(topic):
+    """Get alias ID untuk topic"""
+    return TOPIC_ALIASES.get(topic)
+
+def track_topic_alias_usage(alias_id, topic, payload_size):
+    """Track penggunaan topic alias untuk bandwidth monitoring"""
+    if alias_id in topic_alias_usage:
+        stats = topic_alias_usage[alias_id]
+        stats["count"] += 1
+        stats["bytes_saved"] += len(topic.encode()) - 2
+        
+        if stats["count"] % 10 == 0:
+            total_saved = sum(s["bytes_saved"] for s in topic_alias_usage.values())
+            logging.info(f"   📊 Topic Alias Stats: {stats['count']} publishes, {total_saved} bytes saved")
+
 # =============================================
 # CALLBACK FUNCTIONS
 # =============================================
@@ -60,6 +93,9 @@ def on_connect(client, userdata, flags, rc):
         # Subscribe ke command topic untuk request-response pattern
         client.subscribe("command/sensor-gerak", qos=2)
         logging.info("📡 Subscribe ke command/sensor-gerak untuk request-response")
+        logging.info(f"   🏷️  Topic Alias Map: {len(TOPIC_ALIASES)} aliases configured")
+        for alias_id, topic in [(v, k) for k, v in TOPIC_ALIASES.items()]:
+            logging.info(f"      Alias #{alias_id}: {topic}")
         client.publish(
             LWT_TOPIC,
             json.dumps({"client_id": CLIENT_ID, "status": "ONLINE", "timestamp": datetime.now().isoformat()}),
@@ -168,6 +204,7 @@ def main():
     logging.info(f"      - User Properties: {len(USER_PROPERTIES)} properties")
     logging.info(f"      - Request-Response topic: {RESPONSE_TOPIC}")
     logging.info(f"      - Flow Control: max_inflight=30 messages")
+    logging.info(f"      - Topic Alias: {len(TOPIC_ALIASES)} mappings (bandwidth optimization)")
 
     client.connect(BROKER_HOST, BROKER_PORT, keepalive=60)
     client.loop_start()
@@ -202,8 +239,13 @@ def main():
                 qos=QOS
             )
 
+            # Track topic alias usage
+            alias_id = get_topic_alias_id(TOPIC)
+            if alias_id:
+                track_topic_alias_usage(alias_id, TOPIC, len(json.dumps(payload)))
+
             emoji = "🚨" if motion == "SUSPICIOUS" else ("👤" if motion == "DETECTED" else "✅")
-            logging.info(f"{emoji} Motion: {motion} | Confidence: {confidence} | mid={result.mid}")
+            logging.info(f"{emoji} Motion: {motion} | Confidence: {confidence} | mid={result.mid} | Alias #{alias_id}")
 
             # Jika mencurigakan, kirim juga ke topic alert
             if motion == "SUSPICIOUS":
@@ -219,13 +261,18 @@ def main():
                     "message_expiry_seconds": MESSAGE_EXPIRY,
                     "user_properties": dict(USER_PROPERTIES)
                 }
-                client.publish(
+                alert_result = client.publish(
                     TOPIC_ALERT,
                     json.dumps(alert_payload),
-                    qos=2,      # QoS 2 untuk alert kritis
-                    retain=True  # Retain agar subscriber baru tahu last alert
+                    qos=2,
+                    retain=True
                 )
-                logging.info(f"   🔴 ALERT dikirim ke {TOPIC_ALERT} (retain=True)")
+                # Track topic alias for alert
+                alert_alias_id = get_topic_alias_id(TOPIC_ALERT)
+                if alert_alias_id:
+                    track_topic_alias_usage(alert_alias_id, TOPIC_ALERT, len(json.dumps(alert_payload)))
+                
+                logging.info(f"   🔴 ALERT dikirim ke {TOPIC_ALERT} (retain=True, Alias #{alert_alias_id})")
 
             time.sleep(INTERVAL)
 

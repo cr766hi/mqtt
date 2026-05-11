@@ -40,6 +40,46 @@ TEMP_THRESHOLD_HIGH = 35.0   # °C
 HUMIDITY_HIGH       = 80.0   # %
 HUMIDITY_LOW        = 30.0   # %
 
+# Topic Alias Mapping - MQTT 5.0 Feature untuk reduce bandwidth
+TOPIC_ALIASES = {
+    "sensors/motion/alert": 1,
+    "sensors/temperature": 2,
+    "sensors/humidity": 3,
+    "status/publisher-suhu": 4,
+    "status/publisher-kelembaban": 5,
+    "status/publisher-gerak": 6,
+    "response/publisher-suhu": 7,
+    "response/publisher-gerak": 8,
+    "command/sensor-suhu": 9,
+    "command/sensor-gerak": 10
+}
+
+# Track topic alias usage
+topic_alias_usage = {
+    1: {"topic": "sensors/motion/alert", "count": 0},
+    2: {"topic": "sensors/temperature", "count": 0},
+    3: {"topic": "sensors/humidity", "count": 0},
+    4: {"topic": "status/publisher-suhu", "count": 0},
+    5: {"topic": "status/publisher-kelembaban", "count": 0},
+    6: {"topic": "status/publisher-gerak", "count": 0},
+    7: {"topic": "response/publisher-suhu", "count": 0},
+    8: {"topic": "response/publisher-gerak", "count": 0},
+    9: {"topic": "command/sensor-suhu", "count": 0},
+    10: {"topic": "command/sensor-gerak", "count": 0}
+}
+
+def get_topic_alias_id(topic):
+    """Get alias ID untuk topic"""
+    return TOPIC_ALIASES.get(topic)
+
+def track_topic_alias_usage(alias_id, topic):
+    """Track penggunaan topic alias"""
+    if alias_id in topic_alias_usage:
+        topic_alias_usage[alias_id]["count"] += 1
+        if topic_alias_usage[alias_id]["count"] % 20 == 0:
+            total_count = sum(s["count"] for s in topic_alias_usage.values())
+            logging.info(f"   📊 Topic Alias Stats: {total_count} messages received using aliases")
+
 # =============================================
 # STATE MONITORING
 # =============================================
@@ -76,18 +116,18 @@ def send_command_request(client, target_publisher, command_type, **kwargs):
     
     return correlation_id
 
-def process_response(topic, data):
+def process_response(topic, data, alias_id=None):
     """Proses response dari publisher"""
     correlation_id = data.get("correlation_id", "N/A")
     response_type = data.get("type", "UNKNOWN")
     
     if correlation_id in pending_requests:
         req = pending_requests[correlation_id]
-        logging.info(f"📬 Response diterima: {response_type} dari {req['target']} (correlation_id={correlation_id})")
+        logging.info(f"📬 Response diterima: {response_type} dari {req['target']} (correlation_id={correlation_id}, Alias #{alias_id})" if alias_id else f"📬 Response diterima: {response_type} dari {req['target']} (correlation_id={correlation_id})")
         logging.info(f"   Data: {json.dumps(data, indent=2)}")
         del pending_requests[correlation_id]
     else:
-        logging.info(f"📬 Response (unsolicited): {response_type} - {data.get('client_id', 'Unknown')}")
+        logging.info(f"📬 Response (unsolicited): {response_type} - {data.get('client_id', 'Unknown')} (Alias #{alias_id})" if alias_id else f"📬 Response (unsolicited): {response_type} - {data.get('client_id', 'Unknown')}")
 
 # =============================================
 # CALLBACK FUNCTIONS
@@ -105,11 +145,14 @@ def on_connect(client, userdata, flags, rc):
         logging.info(f"  Threshold suhu : > {TEMP_THRESHOLD_HIGH}°C")
         logging.info(f"  Threshold humid: < {HUMIDITY_LOW}% atau > {HUMIDITY_HIGH}%")
         logging.info("=" * 55)
+        logging.info(f"  🏷️  Topic Alias Map: {len(TOPIC_ALIASES)} aliases configured")
+        for alias_id, topic in [(v, k) for k, v in TOPIC_ALIASES.items()]:
+            logging.info(f"      Alias #{alias_id}: {topic}")
+        logging.info("=" * 55)
         logging.info(f"  📌 FITUR BARU:")
         logging.info(f"     - Request-Response Pattern aktif")
         logging.info(f"     - Shared Subscription support")
-        logging.info(f"     - Flow Control: max_inflight=20 messages")
-        logging.info("=" * 55)
+        logging.info(f"     - Topic Alias: bandwidth optimization")
         
         # Demo: kirim command GET_STATUS ke publisher suhu
         import threading
@@ -131,6 +174,11 @@ def on_message(client, userdata, msg):
     qos    = msg.qos
     retain = msg.retain
 
+    # Track topic alias usage
+    alias_id = get_topic_alias_id(topic)
+    if alias_id:
+        track_topic_alias_usage(alias_id, topic)
+
     try:
         payload = json.loads(msg.payload.decode())
     except Exception:
@@ -138,21 +186,21 @@ def on_message(client, userdata, msg):
 
     # ---- Routing ----
     if "alert" in topic:
-        process_alert(topic, payload, qos, retain)
+        process_alert(topic, payload, qos, retain, alias_id)
 
     elif topic.startswith("status/"):
-        process_status(topic, payload, retain)
+        process_status(topic, payload, retain, alias_id)
 
     elif topic.startswith("response/"):
-        process_response(topic, payload)
+        process_response(topic, payload, alias_id)
 
     elif topic == "sensors/temperature":
-        check_temp_threshold(payload)
+        check_temp_threshold(payload, alias_id)
 
     elif topic == "sensors/humidity":
-        check_humidity_threshold(payload)
+        check_humidity_threshold(payload, alias_id)
 
-def process_alert(topic, data, qos, retain):
+def process_alert(topic, data, qos, retain, alias_id=None):
     """Proses alert masuk"""
     alert_id  = data.get('alert_id', 'N/A')
     severity  = data.get('severity', 'N/A')
@@ -168,7 +216,8 @@ def process_alert(topic, data, qos, retain):
         "confidence": confidence,
         "timestamp": ts,
         "retain": retain,
-        "qos": qos
+        "qos": qos,
+        "alias_id": alias_id
     }
     alert_history.append(alert_record)
 
@@ -178,13 +227,13 @@ def process_alert(topic, data, qos, retain):
     logging.info(f"🔴 Severity : {severity}")
     logging.info(f"🔴 Pesan    : {message}")
     logging.info(f"🔴 Conf     : {confidence}")
-    logging.info(f"🔴 Topic    : {topic}")
+    logging.info(f"🔴 Topic    : {topic} (Alias #{alias_id})" if alias_id else f"🔴 Topic    : {topic}")
     logging.info(f"🔴 QoS      : {qos} | Retain: {retain}")
     logging.info(f"🔴 Waktu    : {ts}")
     logging.info("🔴 " + "=" * 50)
     logging.info(f"   Total alert ditangani: {len(alert_history)}")
 
-def process_status(topic, data, retain):
+def process_status(topic, data, retain, alias_id=None):
     """Monitor status publisher (dari LWT)"""
     client_id = data.get('client_id', 'Unknown')
     status    = data.get('status', 'N/A')
@@ -198,11 +247,11 @@ def process_status(topic, data, retain):
     if prev_status and prev_status != status:
         # Status berubah!
         if status == "OFFLINE":
-            logging.info(f"⚠️  PUBLISHER DOWN: {client_id} -> OFFLINE | LWT diterima! | Retain={retain}")
+            logging.info(f"⚠️  PUBLISHER DOWN: {client_id} -> OFFLINE | LWT diterima! (Alias #{alias_id})" if alias_id else f"⚠️  PUBLISHER DOWN: {client_id} -> OFFLINE | LWT diterima!")
         else:
-            logging.info(f"✅ PUBLISHER BACK: {client_id} -> ONLINE | Retain={retain}")
+            logging.info(f"✅ PUBLISHER BACK: {client_id} -> ONLINE (Alias #{alias_id})" if alias_id else f"✅ PUBLISHER BACK: {client_id} -> ONLINE")
     else:
-        logging.info(f"{emoji} Status: {client_id} -> {status} | {ts}")
+        logging.info(f"{emoji} Status: {client_id} -> {status} | {ts} (Alias #{alias_id})" if alias_id else f"{emoji} Status: {client_id} -> {status} | {ts}")
 
     # Tampilkan ringkasan status semua publisher
     if publisher_status:
@@ -210,7 +259,7 @@ def process_status(topic, data, retain):
         total  = len(publisher_status)
         logging.info(f"   Sistem: {online}/{total} publisher ONLINE")
 
-def check_temp_threshold(data):
+def check_temp_threshold(data, alias_id=None):
     """Generate alert jika suhu melebihi threshold"""
     global consecutive_temp_alerts
     temp   = data.get('value', 0)
@@ -219,7 +268,10 @@ def check_temp_threshold(data):
 
     if temp > TEMP_THRESHOLD_HIGH:
         consecutive_temp_alerts += 1
-        logging.info(f"⚠️  THRESHOLD ALERT: Suhu {temp}°C > {TEMP_THRESHOLD_HIGH}°C (ke-{consecutive_temp_alerts}x berturut)")
+        msg = f"⚠️  THRESHOLD ALERT: Suhu {temp}°C > {TEMP_THRESHOLD_HIGH}°C (ke-{consecutive_temp_alerts}x berturut)"
+        if alias_id:
+            msg += f" (Alias #{alias_id})"
+        logging.info(msg)
         if consecutive_temp_alerts >= 3:
             logging.info(f"🔴 CRITICAL: Suhu tinggi {consecutive_temp_alerts}x berturut! Cek sistem pendingin!")
     else:
@@ -227,15 +279,21 @@ def check_temp_threshold(data):
             logging.info(f"✅ Suhu kembali normal: {temp}°C (setelah {consecutive_temp_alerts}x alert)")
         consecutive_temp_alerts = 0
 
-def check_humidity_threshold(data):
+def check_humidity_threshold(data, alias_id=None):
     """Generate alert jika kelembaban di luar range"""
     hum    = data.get('value', 0)
     ts     = data.get('timestamp', '')
 
     if hum > HUMIDITY_HIGH:
-        logging.info(f"⚠️  THRESHOLD ALERT: Kelembaban {hum}% > {HUMIDITY_HIGH}% (terlalu lembab!)")
+        msg = f"⚠️  THRESHOLD ALERT: Kelembaban {hum}% > {HUMIDITY_HIGH}% (terlalu lembab!)"
+        if alias_id:
+            msg += f" (Alias #{alias_id})"
+        logging.info(msg)
     elif hum < HUMIDITY_LOW:
-        logging.info(f"⚠️  THRESHOLD ALERT: Kelembaban {hum}% < {HUMIDITY_LOW}% (terlalu kering!)")
+        msg = f"⚠️  THRESHOLD ALERT: Kelembaban {hum}% < {HUMIDITY_LOW}% (terlalu kering!)"
+        if alias_id:
+            msg += f" (Alias #{alias_id})"
+        logging.info(msg)
 
 def on_subscribe(client, userdata, mid, granted_qos):
     logging.info(f"✅ Subscribe dikonfirmasi | QoS granted: {granted_qos}")

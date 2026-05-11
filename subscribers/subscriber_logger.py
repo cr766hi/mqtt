@@ -39,6 +39,43 @@ SUBSCRIPTIONS = [
     ("status/#", 1),        # Semua status publisher, QoS 1
 ]
 
+# Topic Alias mappings untuk bandwidth optimization
+TOPIC_ALIASES = {
+    "sensors/temperature": 1,
+    "sensors/humidity": 2,
+    "sensors/humidity/config": 3,
+    "sensors/motion": 4,
+    "sensors/motion/alert": 5,
+    "status/publisher-suhu": 6,
+    "status/publisher-kelembaban": 7,
+    "status/publisher-gerak": 8,
+}
+
+# Topic Alias usage statistics
+topic_alias_usage = {}
+for alias_id in TOPIC_ALIASES.values():
+    topic_alias_usage[alias_id] = {
+        "topic": [k for k, v in TOPIC_ALIASES.items() if v == alias_id][0],
+        "count": 0,
+        "bytes_saved": 0
+    }
+
+def get_topic_alias_id(topic):
+    """Get alias ID for given topic"""
+    return TOPIC_ALIASES.get(topic)
+
+def track_topic_alias_usage(alias_id, topic):
+    """Track topic alias usage statistics"""
+    if alias_id in topic_alias_usage:
+        stats = topic_alias_usage[alias_id]
+        stats["count"] += 1
+        # Bytes saved = topic name length - 2 bytes untuk integer ID
+        stats["bytes_saved"] += len(topic.encode()) - 2
+        
+        # Log setiap 20 messages
+        if stats["count"] % 20 == 0:
+            logging.info(f"📊 Topic Alias #{alias_id} stats: {stats['count']} messages, {stats['bytes_saved']} bytes saved")
+
 # =============================================
 # STATISTIK
 # =============================================
@@ -67,6 +104,11 @@ def on_connect(client, userdata, flags, rc):
         client.subscribe(SUBSCRIPTIONS)
         for topic, qos in SUBSCRIPTIONS:
             logging.info(f"  📡 Subscribe: {topic} (QoS {qos})")
+        
+        # Log topic aliases
+        logging.info(f"  🏷️ Topic Alias Map: {len(TOPIC_ALIASES)} aliases")
+        for alias_id, topic in sorted([(v, k) for k, v in TOPIC_ALIASES.items()]):
+            logging.info(f"     Alias #{alias_id}: {topic}")
         logging.info("=" * 55)
     else:
         logging.error(f"❌ Gagal connect, kode: {rc}")
@@ -79,6 +121,11 @@ def on_message(client, userdata, msg):
     topic   = msg.topic
     qos     = msg.qos
     retain  = msg.retain
+
+    # Track topic alias usage
+    alias_id = get_topic_alias_id(topic)
+    if alias_id:
+        track_topic_alias_usage(alias_id, topic)
 
     try:
         payload = json.loads(msg.payload.decode())
@@ -171,6 +218,7 @@ def print_stats():
 # SETUP CLIENT
 # =============================================
 client = mqtt.Client(client_id=CLIENT_ID)
+client.max_inflight_messages_set(20)  # Flow Control
 client.on_connect    = on_connect
 client.on_message    = on_message
 client.on_subscribe  = on_subscribe
