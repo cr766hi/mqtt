@@ -34,27 +34,8 @@ mqtt_project/
                                     port 9001 (WS)      └──► [Dashboard Web]
 ```
 
----
 
-## ✅ Fitur MQTT yang Diimplementasi
 
-| Fitur | Implementasi | Status |
-|---|---|---|
-| **QoS 0** | Publisher Kelembaban → fire & forget | ✅ |
-| **QoS 1** | Publisher Suhu → at least once delivery | ✅ |
-| **QoS 2** | Publisher Gerak & Alert → exactly once | ✅ |
-| **Retain Message** | Config sensor, Status publisher, Last alert | ✅ |
-| **Last Will & Testament** | Semua publisher punya LWT di topic `status/#` | ✅ |
-| **Wildcard `+`** | `sensors/+/alert` (single level) | ✅ |
-| **Wildcard `#`** | `sensors/#`, `status/#` (multi level) | ✅ |
-| **User Properties** | Metadata sensor di setiap pesan (MQTT 5.0) | ✅ |
-| **Message Expiry** | TTL untuk sensor data (MQTT 5.0) | ✅ |
-| **Request-Response** | Pattern command-response (MQTT 5.0) | ✅ |
-| **Shared Subscription** | Distribusi pesan antar consumers (MQTT 5.0) | ✅ |
-| **Flow Control** | Max inflight messages per client (MQTT 5.0) | ✅ |
-| **WebSocket** | Dashboard web terhubung via WS port 9001 | ✅ |
-
----
 
 ## 🆕 Fitur MQTT 5.0 Baru - Penjelasan Detail
 
