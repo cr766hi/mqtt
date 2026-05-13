@@ -91,6 +91,9 @@ def track_topic_alias_usage(alias_id, topic, payload_size):
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
         logging.info(f"✅ Terhubung ke broker MQTT ({BROKER_HOST}:{BROKER_PORT})")
+        # Subscribe ke command topic untuk request-response pattern
+        client.subscribe("command/sensor-kelembaban", qos=1)
+        logging.info("📡 Subscribe ke command/sensor-kelembaban untuk request-response")
         # Publish konfigurasi awal dengan RETAIN=True
         # Subscriber baru akan langsung dapat nilai terakhir
         config_payload = {
@@ -123,8 +126,56 @@ def on_connect(client, userdata, flags, rc):
         logging.error(f"❌ Gagal connect, kode: {rc}")
 
 def on_message(client, userdata, msg):
-    """Handler untuk pesan masuk (untuk future use)"""
-    logging.info(f"📨 Pesan diterima di topic {msg.topic}: {msg.payload.decode()}")
+    """Handler untuk pesan request masuk (request-response pattern)"""
+    try:
+        command = json.loads(msg.payload.decode())
+        cmd_type = command.get("type", "unknown")
+        correlation_id = command.get("correlation_id", str(uuid.uuid4()))
+        
+        if cmd_type == "GET_STATUS":
+            response = {
+                "correlation_id": correlation_id,
+                "client_id": CLIENT_ID,
+                "type": "STATUS_RESPONSE",
+                "status": "ACTIVE",
+                "qos": QOS,
+                "expiry_interval": MESSAGE_EXPIRY,
+                "current_value": humidity_value,
+                "timestamp": datetime.now().isoformat()
+            }
+            client.publish(
+                RESPONSE_TOPIC,
+                json.dumps(response),
+                qos=1,
+                retain=False
+            )
+            logging.info(f"📨 Request-Response: GET_STATUS (correlation_id={correlation_id})")
+        elif cmd_type == "GET_CONFIG":
+            response = {
+                "correlation_id": correlation_id,
+                "client_id": CLIENT_ID,
+                "type": "CONFIG_RESPONSE",
+                "sensor_id": "HUMID-001",
+                "location": "Ruang Server",
+                "unit": "%",
+                "min_threshold": 30,
+                "max_threshold": 80,
+                "user_properties": dict(USER_PROPERTIES),
+                "message_expiry_interval": MESSAGE_EXPIRY,
+                "timestamp": datetime.now().isoformat()
+            }
+            client.publish(
+                RESPONSE_TOPIC,
+                json.dumps(response),
+                qos=1
+            )
+            logging.info(f"📨 Request-Response: GET_CONFIG (correlation_id={correlation_id})")
+        else:
+            logging.warning(f"⚠️  Unknown command type: {cmd_type}")
+    except json.JSONDecodeError:
+        logging.warning(f"⚠️  Gagal parse JSON dari topic {msg.topic}")
+    except Exception as e:
+        logging.error(f"❌ Error di on_message: {e}")
 
 def on_publish(client, userdata, mid):
     pass  # QoS 0: callback ini kadang tidak dipanggil
@@ -179,6 +230,7 @@ def main():
     logging.info(f"      - Message Expiry Interval: {MESSAGE_EXPIRY}s")
     logging.info(f"      - User Properties: {len(USER_PROPERTIES)} properties")
     logging.info(f"      - Shared Subscription: $share/humidity-consumers/sensors/humidity")
+    logging.info(f"      - Request-Response: command/sensor-kelembaban -> response/publisher-kelembaban")
     logging.info(f"      - Flow Control: max_inflight=10 messages")
 
     client.connect(BROKER_HOST, BROKER_PORT, keepalive=60)

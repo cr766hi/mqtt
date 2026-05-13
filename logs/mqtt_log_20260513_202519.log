@@ -1,0 +1,14 @@
+[20:25:19] =======================================================
+[20:25:19]   SUBSCRIBER DATA LOGGER - TERHUBUNG
+[20:25:19] =======================================================
+[20:25:19]   Broker  : localhost:1883
+[20:25:19]   Log file: E:\TugasInsis2\mqtt_project\subscribers\..\logs\mqtt_log_20260513_202519.log
+[20:25:19]      Alias #1: sensors/temperature
+[20:25:19]      Alias #2: sensors/humidity
+[20:25:19]      Alias #3: sensors/humidity/config
+[20:25:19]      Alias #4: sensors/motion
+[20:25:19]      Alias #5: sensors/motion/alert
+[20:25:19]      Alias #6: status/publisher-suhu
+[20:25:19]      Alias #7: status/publisher-kelembaban
+[20:25:19]      Alias #8: status/publisher-gerak
+[20:25:19] =======================================================
